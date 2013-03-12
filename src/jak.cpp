@@ -29,11 +29,17 @@ seed = 1776
 #include <cmath>
 #include <cfloat>
 #include <fstream>
-#include <stdio.h>
+#include <iomanip>
+
+#include <boost/program_options.hpp>
 
 #include "xorshift64.h"
 #include "rexp.h"
 #include "aliastable.h"
+
+// Utility functions
+#define CERRORR(err_msg) ((std::cerr << "ERROR: " << err_msg << std::endl), false);
+#define CERROR(err_msg) (std::cerr << "ERROR: " << err_msg << std::endl);
 
 using namespace std;
 
@@ -56,7 +62,7 @@ struct nodestruct {
     char label;    // nucleotide
 	
 	nodestruct() : child_1(-1), child_2(-1), parent(-1),
-	               label(0), time(0.0), species(0) { }
+	               time(0.0), species(0), label(0) { }
 };
 
 void coaltree(xorshift64& myrand1, vector<int>& activelist, double theta, double time, char species,
@@ -67,6 +73,7 @@ string id_to_string(int x);
 string species_label(int type);
 string tree_to_string(const vector<nodestruct>& v);
 string mutation_string(const vector<nodestruct>& t);
+uint64_t key_create(const vector<nodestruct>& temp_nodes);
 
 //-----------------------------------------------------------------------------//
 // random seed generator
@@ -83,92 +90,90 @@ inline unsigned int create_random_seed() {
     return (v == 0) ? 0x6a27d958 : (v & 0x7FFFFFFF); // return at most a 31-bit seed
 }
 
-//-------------------------------------------------------------------------------------------------//
+//----------------------------------------------------------------------------//
+namespace po = boost::program_options;
+
+namespace boost { namespace program_options {
+template<>
+typed_value<bool>* value(bool* v) {
+	return bool_switch(v);
+	//typed_value<bool>* r = new typed_value<bool>(v);
+    //r->default_value(0, "off");
+    //r->implicit_value(1, "on");
+	//return r;
+}
+}}
+
+struct args_t
+{			
+	// use X-Macros to specify argument variables
+#	define XM(lname, sname, desc, type, def) type XV(lname) ;
+#	include "jakargs.xmh"
+#	undef XM
+	po::options_description desc;
+	string runname;
+};
+
+bool process_args(int argc, char* argv[], args_t &a){
+	po::variables_map vm;
+	a.runname = argv[0];
+	a.desc.add_options()
+		#define XM(lname, sname, desc, type, def) ( \
+			XS(lname) IFD(sname, "," BOOST_PP_STRINGIZE sname), \
+			po::value< type >(&a.XV(lname))->default_value(def), \
+			desc )				
+		#include "jakargs.xmh"
+		#undef XM
+	;
+	try {
+		po::store(po::command_line_parser(argc, argv).options(a.desc).run(), vm);
+		po::notify(vm);
+	} catch (std::exception &e) {
+		CERROR(e.what());
+		return CERRORR("unable to process command line");
+	}
+	return true;
+}
+
+//----------------------------------------------------------------------------//
 
 int main(int argc, char *argv[])
 {
-    int N1, N2, n, N, trees;
-    double theta1, theta2, theta3, t1, t2;
+	int N1, N2, n, trees;
+	double theta1, theta2, theta3, t1, t2;
+	typedef map<uint64_t,size_t> counts_t;
+	counts_t counts;
+	args_t args;
+	if(!process_args(argc, argv, args))
+		return EXIT_FAILURE;
+	if(args.help) {
+		cerr << "Usage:\n  "
+		     << args.runname << " [options]"
+			 << endl << endl;
+		cerr << args.desc << endl;
+		return EXIT_FAILURE;
+	}
+	N1 = args.tips1;
+	N2 = args.tips2;
+	trees = args.reps;
+	theta1 = args.theta1;
+	theta2 = args.theta2;
+	theta3 = args.theta3;
+	t1 = args.t1;
+	t2 = args.t2;
 
-	species_label(18278);
 
-	//TODO: fix input validation
-    if (argc == 9) {
-        trees=atoi(argv[1]);
-		while(trees<1)
-		{	cout<<"Error: Enter number of trees: ";
-			cin>>trees;
-		}
-		N1=atoi(argv[2]);
-		while(N1<1)
-		{	cout<<"Error: Enter number of tips for first species: ";
-			cin>>N1;
-		}
-        N2=atoi(argv[3]);
-		while(N2<1)
-		{	cout<<"Error: Enter number of tips for second species: ";
-			cin>>N1;
-		}
-        theta1=strtod(argv[4], NULL);
-		while(theta1<0.0)
-		{	cout<<"Error: Enter theta1: ";
-			cin>>theta1;
-		}
-        theta2=strtod(argv[5], NULL);
-		while(theta2<0.0)
-		{	cout<<"Error: Enter theta2: ";
-			cin>>theta2;
-		}
-        theta3=strtod(argv[6], NULL);
-		while(theta3<0.0)
-		{	cout<<"Error: Enter theta3: ";
-			cin>>theta3;
-		}
-        t1=strtod(argv[7], NULL);
-		while(t1<0.0)
-		{	cout<<"Error: Enter t1: ";
-			cin>>t1;
-		}
-        t2=strtod(argv[8], NULL);
-		while(t2<0.0)
-		{	cout<<"Error: Enter t2: ";
-			cin>>t2;
-		}
-    }
-    else if (argc == 1) {
-        cout << "Enter number of trees: ";
-        cin >> trees;
-        cout << endl << "Enter the number of tips for first species: ";
-        cin >> N1;                                                                             //receive # of starting nodes (species 1)
-        cout << endl << "Enter number of tips for second species: ";
-        cin >> N2;                                                                             //receive # of starting nodes (species 2)
-        cout << endl << "Enter theta 1: ";
-        cin >> theta1;
-        cout << endl << "Enter theta 2: ";
-        cin >> theta2;
-        cout << endl << "Enter theta 3: ";
-        cin >> theta3;
-        cout << endl << "Enter t1: ";
-        cin >> t1;
-        cout << endl << "Enter t2: ";
-        cin >> t2;
-    } else {
-        cerr << "error, must have format: prg name, trees, # of tips for first"
-                "species, # of tips for second species, theta1, theta2,"
-                "theta3, t1, t2" << endl;
-		cerr << "Press ENTER to quit." << flush;
-		cin.clear();
-		cin.sync();
-		cin.ignore( numeric_limits<streamsize>::max(), '\n' );
-        return EXIT_FAILURE;
-    }
-
-    n = N1+N2; //n=total original tips from both species
+	n = N1+N2; //n=total original tips from both species
 
 	//use xorshift64 class for random number generator
     xorshift64 myrand;
-    myrand.seed(create_random_seed());
-
+    unsigned int seed = args.seed;
+    if(seed == 0)
+    	seed = create_random_seed();
+    myrand.seed(seed);
+	
+	cerr << "# Using PRNG seed: " << seed << endl;
+	
 	// construct alias tables for mutation simulation
 	for(int i=0;i<4;++i) {
 		mutation[i].create(&mutation_matrix[i][0],&mutation_matrix[i][4]);
@@ -214,33 +219,80 @@ int main(int argc, char *argv[])
             nodevector[i].label = nodevector[nodevector[i].parent].label;
             set_mutations(myrand, nodevector[i].label, nodevector[i].time);
         }
-		// Label nodes
-        for (int i=0; i < nodevector.size(); i++){
-            char s[] = "ACGT";
-            nodevector[i].label = s[nodevector[i].label];
+        if(args.count_tips)
+        {
+        	uint64_t u = key_create(nodevector);
+        	// cout << setw(16) << setfill('0') << hex << u << endl;
+        	++counts[u];
+        	
+        } else {
+			// Label nodes
+		    for (size_t i=0; i < nodevector.size(); i++){
+		        char s[] = "ACGT";
+		        nodevector[i].label = s[(size_t)nodevector[i].label];
+		    }
+		    // print newick tree to console
+			cout << mutation_string(nodevector) << "\t";
+		    cout << tree_to_string(nodevector) << endl;      
         }
-
-//----------------------------------------------------------------------------//
-
-		cout << mutation_string(nodevector) << "\t";
-        cout << tree_to_string(nodevector) << endl; //print newick tree to console
+        
     } //end # of trees loop
+    if(args.count_tips) {
+    	cout << "A1\tC1\tG1\tT1\tA2\tC2\tG2\tT2\tCount\n";
+    	for(counts_t::const_iterator it = counts.begin();
+    		it != counts.end(); ++it) {
+    		uint64_t u = it->first;
+    		for(int i=0;i<8;u >>= 8,++i)
+    			cout << (u & 0xFF) << "\t";
+    		cout << it->second << endl;
+    	}
+    }
 
 #ifndef NDEBUG
-    cerr<<"Random seed used: "<<create_random_seed()<<endl;
-    cerr << "Press ENTER to quit." << flush;
-	cin.clear();
-	cin.sync();
-    cin.ignore( numeric_limits<streamsize>::max(), '\n' );
+//    cerr << "Press ENTER to quit." << flush;
+//	cin.clear();
+//	cin.sync();
+//    cin.ignore( numeric_limits<streamsize>::max(), '\n' );
 #endif
     return EXIT_SUCCESS;
 }
+
+// key_create must be used before relabeling
+uint64_t key_create(const vector<nodestruct>& temp_nodes){
+    union key_union{
+        uint64_t key;
+        unsigned char count[8];
+
+    } k;
+
+    k.key = 0;
+
+    for (size_t i = 0; i < temp_nodes.size(); ++i)
+    {
+        assert(temp_nodes[i].label < 4);
+        //ensure node is a tip
+        if(temp_nodes[i].child_1 != -1 || temp_nodes[i].child_2 != -1)
+        	break;
+       	switch(temp_nodes[i].species) {
+       	case 1:
+       		k.count[(size_t)temp_nodes[i].label]++;
+       		break;
+       	case 2:
+       		k.count[4+(size_t)temp_nodes[i].label]++;
+       		break;
+       	default:
+       		// You should never get here.
+       		assert(false);
+       		break;
+        }
+    }
+	return k.key;
+} 
 
 void coaltree(xorshift64& myrand1, vector<int>& activelist, double theta, double time, char species,
 	          vector<nodestruct>& nodeVector)
 {
     double T = 0.0;
-    int i = 0;
 	int random1, random2;
 
 	int size = (int)activelist.size();
@@ -303,8 +355,9 @@ string id_to_string(int x) {
 //Function to convert species number to letter format for tree output
 string species_label(int species)
 {
-    static vector<string> v;
-	// Species of 1 should equal 'A';
+	// Species numbers start at 1.
+	assert(species >= 1);
+	static vector<string> v;
 	species -= 1;
 	if(species < 0)
 		return "%";
@@ -336,11 +389,6 @@ string species_label(int species)
 		reverse(ans.begin(),ans.end());
 		v.push_back(ans);
 	}
-	
-	for (int i = 0; i < v.size(); i++) {
-		cout << v[i] << " ";
-		}
-	cout << endl;
     return v[species];
 }
 //-----------------------------------------------------------------------------//
@@ -348,7 +396,7 @@ string species_label(int species)
 string tree_to_string(const vector<nodestruct>& v) {
     vector<string> node_str(v.size(),"");
     char buffer[16];
-    for(int i=0; i<v.size(); i++) {
+    for(size_t i=0; i<v.size(); i++) {
         string temp = "";
 
         if(v[i].child_1 != -1 && v[i].child_2 != -1) {
@@ -372,7 +420,7 @@ string tree_to_string(const vector<nodestruct>& v) {
 string mutation_string(const vector<nodestruct>& t)
 {
 	string temp = "[";
-	for(int i=0; i<t.size(); i++) {
+	for(size_t i=0; i<t.size(); i++) {
 		temp += t[i].label;
 	}
 	temp += ']';
@@ -387,7 +435,7 @@ int set_mutations(xorshift64 &myrand1, char &G, double time)
     while (m <= time) { //if m < branch length --> mutate
         ++counter;  //muation counter
 		// use the alias tables to effeciently sample the result of the mutation
-		G = static_cast<char>(mutation[G](myrand1.get_uint64()));
+		G = static_cast<char>(mutation[(size_t)G](myrand1.get_uint64()));
         m += rand_exp(myrand1);
     }
 	return counter;
